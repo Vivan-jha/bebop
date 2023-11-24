@@ -1,34 +1,55 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.9;
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.16;
 
-// Uncomment this line to use console.log
-// import "hardhat/console.sol";
+import {SafeERC20Upgradeable, IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable-4.3.2/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable-4.3.2/proxy/utils/Initializable.sol";
+import {ExchangeData} from "../ExternalSwapHandler/Helper/ExchangeData.sol";
+import {TransferHelper} from "@uniswap/lib/contracts/libraries/TransferHelper.sol";
+import {ErrorLibrary} from "./../../library/ErrorLibrary.sol";
+import {ApproveControl} from "../ApproveControl.sol";
+import {IPriceOracle} from "../../oracle/IPriceOracle.sol";
+import {ExternalSlippageControl} from "../ExternalSlippageControl.sol";
 
-contract Lock {
-    uint public unlockTime;
-    address payable public owner;
+contract BebopHandler is Initializable, ApproveControl, ExternalSlippageControl {
+  using SafeERC20Upgradeable for IERC20Upgradeable;
+  address internal swapTarget;
+  IPriceOracle internal oracle;
 
-    event Withdrawal(uint amount, uint when);
+  function init(address _swapTarget, address _oracle) external initializer {
+    swapTarget = _swapTarget;
+    oracle = IPriceOracle(_oracle);
+  }
 
-    constructor(uint _unlockTime) payable {
-        require(
-            block.timestamp < _unlockTime,
-            "Unlock time should be in the future"
-        );
-
-        unlockTime = _unlockTime;
-        owner = payable(msg.sender);
+  function swap(
+    address sellTokenAddress,
+    address buyTokenAddress,
+    uint256 sellAmount,
+    bytes memory callData,
+    address _to
+  ) public payable {
+    uint256 tokenBalance = IERC20Upgradeable(sellTokenAddress).balanceOf(address(this));
+    if (tokenBalance < sellAmount) {
+      revert ErrorLibrary.InsufficientFunds(tokenBalance, sellAmount);
     }
-
-    function withdraw() public {
-        // Uncomment this line, and the import of "hardhat/console.sol", to print a log in your terminal
-        // console.log("Unlock time is %o and block timestamp is %o", unlockTime, block.timestamp);
-
-        require(block.timestamp >= unlockTime, "You can't withdraw yet");
-        require(msg.sender == owner, "You aren't the owner");
-
-        emit Withdrawal(address(this).balance, block.timestamp);
-
-        owner.transfer(address(this).balance);
+    setAllowance(sellTokenAddress, swapTarget, sellAmount);
+    uint256 tokensBefore = IERC20Upgradeable(buyTokenAddress).balanceOf(address(this));
+    (bool success, ) = swapTarget.call(callData);
+    if (!success) {
+      revert ErrorLibrary.SwapFailed();
     }
+    uint256 tokensSwapped;
+
+    uint buyTokenBalance = IERC20Upgradeable(buyTokenAddress).balanceOf(address(this));
+    tokensSwapped = buyTokenBalance - tokensBefore;
+    if (tokensSwapped == 0) {
+      revert ErrorLibrary.ZeroTokensSwapped();
+    }
+    uint priceSellToken = oracle.getPriceTokenUSD18Decimals(sellTokenAddress, sellAmount);
+    uint priceBuyToken = oracle.getPriceTokenUSD18Decimals(buyTokenAddress, buyTokenBalance);
+
+    validateSwap(priceSellToken, priceBuyToken);
+    TransferHelper.safeTransfer(buyTokenAddress, _to, IERC20Upgradeable(buyTokenAddress).balanceOf(address(this)));
+  }
+
+  receive() external payable {}
 }
