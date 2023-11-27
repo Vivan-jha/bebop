@@ -13,18 +13,16 @@ interface IWETH is IERC20 {
     function deposit() external payable;
 }
 
-// Demo contract that swaps its ERC20 balance for another ERC20.
-// NOT to be used in production.
+
 contract SimpleTokenSwap {
 
     event BoughtTokens(IERC20 sellToken, IERC20 buyToken, uint256 boughtAmount);
 
-    // The WETH contract.
+    
     IWETH public immutable WETH;
-    // Creator of this contract.
+    
     address public owner;
-    // 0x ExchangeProxy address.
-    // See https://docs.0x.org/developer-resources/contract-addresses
+    
     address public exchangeProxy;
 
     constructor(IWETH _weth, address _exchangeProxy) {
